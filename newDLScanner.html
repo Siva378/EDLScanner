@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Phoenix EDL Scanner</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: #0b1120;
+    }
+
+    .glass {
+      background: rgba(255, 255, 255, 0.03);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .accent-glow {
+      box-shadow: 0 0 20px rgba(0, 229, 255, 0.15);
+    }
+
+    .corner-bracket {
+      width: 30px;
+      height: 30px;
+      border-color: rgba(255, 255, 255, 0.8);
+      border-width: 2px;
+      position: absolute;
+    }
+
+    .capture-btn {
+      width: 70px;
+      height: 70px;
+      border-radius: 50%;
+      background: #d1d5db;
+      border: 4px solid #4b5563;
+      position: relative;
+      transition: all 0.2s;
+    }
+
+    .capture-btn:active {
+      transform: scale(0.92);
+      background: #9ca3af;
+    }
+
+    .side-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #00e5ff;
+      box-shadow: 0 0 10px #00e5ff;
+    }
+
+    /* Animations */
+    @keyframes pulse-cyan {
+      0% {
+        transform: scale(1);
+        opacity: 1;
+      }
+
+      50% {
+        transform: scale(1.1);
+        opacity: 0.7;
+      }
+
+      100% {
+        transform: scale(1);
+        opacity: 1;
+      }
+    }
+
+    .animate-glow {
+      animation: pulse-cyan 2s infinite;
+    }
+
+    .result-sheet {
+      transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .result-sheet.hidden {
+      transform: translateY(100%);
+    }
+
+    /* Result card styling from user's robust code */
+    :root {
+      --bg: #080c12;
+      --card: #0f1520;
+      --card2: #151e2e;
+      --border: #1e2d45;
+      --accent: #00e5ff;
+      --green: #00f5a0;
+      --yellow: #ffd740;
+      --red: #ff5252;
+      --dim: #4a6080;
+    }
+  </style>
+</head>
+
+<body class="text-gray-100">
+  <div class="max-w-md mx-auto min-h-screen bg-[#0d1b2a] flex flex-col shadow-2xl relative overflow-hidden">
+
+    <!-- Header -->
+    <header
+      class="flex items-center justify-between px-5 py-4 bg-[#16213e]/80 backdrop-blur-md border-b border-white/5 z-50">
+      <div class="flex items-center gap-3">
+        <div
+          class="w-10 h-10 bg-gradient-to-br from-orange-400 to-red-600 rounded-lg flex items-center justify-center shadow-lg">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="white">
+            <path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71L12 2z" />
+          </svg>
+        </div>
+        <div>
+          <h1 class="text-sm font-bold tracking-tight text-white leading-none">EDL Scanner</h1>
+          <p class="text-[10px] text-gray-400 font-medium">Phoenix eDriver's License Scanner</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-4">
+        <button id="themeToggle" class="p-2 text-gray-400 hover:text-white transition-colors">
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path
+              d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707m12.728 0l-.707-.707M6.343 6.343l-.707-.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+          </svg>
+        </button>
+        <button
+          class="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-gray-300 hover:bg-white/20">
+          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 flex flex-col items-center px-8 py-6 gap-8">
+
+      <!-- Instructions -->
+      <p id="hintText" class="text-center text-[13px] text-gray-300 px-4 leading-relaxed font-medium">
+        Position the <span class="text-white font-bold">front</span> of your driver's license in the frame, then tab
+        Capture -- or load from your device.
+      </p>
+
+      <!-- Scanner Viewport -->
+      <div class="w-full relative group">
+        <!-- Side Pins -->
+        <div class="absolute -left-1 top-1/2 -translate-y-1/2 side-dot z-20"></div>
+        <div class="absolute -right-1 top-1/2 -translate-y-1/2 side-dot z-20"></div>
+
+        <div
+          class="relative w-full aspect-[4/3] bg-[#1a2639] rounded-2xl border border-white/10 overflow-hidden shadow-inner flex flex-col items-center justify-center group-hover:border-cyan-500/30 transition-all duration-300">
+          <!-- Brackets -->
+          <div class="corner-bracket top-4 left-4 border-t border-l"></div>
+          <div class="corner-bracket top-4 right-4 border-t border-r"></div>
+          <div class="corner-bracket bottom-4 left-4 border-b border-l"></div>
+          <div class="corner-bracket bottom-4 right-4 border-b border-r"></div>
+
+          <!-- Video/Placeholder -->
+          <video id="vid" autoplay muted playsinline class="w-full h-full object-cover hidden"></video>
+          <canvas id="preview" class="w-full h-full object-cover hidden"></canvas>
+
+          <!-- Enable Camera UI -->
+          <div id="cameraPlaceholder" class="flex flex-col items-center gap-4">
+            <button onclick="openWebcam()"
+              class="px-6 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-bold rounded-lg shadow-lg active:scale-95 transition-all">
+              Enable Camera
+            </button>
+            <p id="camError" class="text-[11px] text-orange-500 font-bold hidden px-4 text-center">Camera blocked.
+              Please check permissions.</p>
+          </div>
+
+          <!-- Barcode Zone (for back side) -->
+          <div id="bzone"
+            class="absolute left-6 right-6 bottom-6 h-[25%] border border-cyan-400/40 rounded-lg bg-cyan-400/5 hidden flex flex-col items-center justify-center">
+            <span class="text-[9px] font-bold text-cyan-400 tracking-[0.2em] mb-1">PDF417 SCANNER</span>
+            <div
+              class="w-full h-[2px] bg-gradient-to-r from-transparent via-cyan-400 to-transparent absolute top-0 animate-pulse">
+            </div>
+          </div>
+
+          <!-- Status Overlay -->
+          <div id="statusBadge"
+            class="absolute bottom-6 px-3 py-1 bg-black/50 backdrop-blur-md rounded-full border border-white/10 text-[9px] font-bold text-gray-300 flex items-center gap-2 hidden">
+            <div id="statusDot" class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></div>
+            <span id="statusText">DETECTING...</span>
+          </div>
+
+          <!-- Shutter Flash -->
+          <div id="flash"
+            class="absolute inset-0 bg-white opacity-0 pointer-events-none transition-opacity duration-100 z-50"></div>
+        </div>
+      </div>
+
+      <!-- Main Actions -->
+      <div class="flex flex-col items-center gap-4 w-full">
+        <!-- Capture Button -->
+        <button id="capBtn" onclick="doCapture()" disabled
+          class="capture-btn shadow-xl ring-4 ring-black/20 hover:ring-black/40 disabled:opacity-50 disabled:cursor-not-allowed">
+          <div class="absolute inset-2 border-2 border-gray-400 rounded-full"></div>
+        </button>
+
+        <span class="text-xs font-bold text-gray-400 tracking-widest">OR</span>
+
+        <!-- Load Button -->
+        <button onclick="document.getElementById('inCapture').click()"
+          class="w-full max-w-[240px] py-3 bg-[#1e4d5f] hover:bg-[#256077] text-cyan-100 text-[13px] font-extrabold tracking-tight rounded-sm shadow-lg transition-all active:scale-[0.98]">
+          LOAD FROM DEVICE
+        </button>
+      </div>
+
+      <!-- Side Selectors -->
+      <div class="grid grid-cols-2 gap-4 w-full mt-4">
+        <!-- DL Front Card -->
+        <div id="tabFront" onclick="switchTab('front')" class="group cursor-pointer">
+          <div
+            class="aspect-[1.58] bg-[#1a2639] rounded-xl border-2 border-transparent group-active:scale-95 transition-all flex flex-col items-center justify-center gap-2 relative overflow-hidden active-tab-border">
+            <div class="absolute inset-0 bg-cyan-400/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="gray" stroke-width="1.5"
+              class="icon-indicator">
+              <rect x="2" y="5" width="20" height="14" rx="2" />
+              <circle cx="8" cy="12" r="2.5" />
+              <line x1="13" y1="9" x2="19" y2="9" />
+            </svg>
+            <span class="text-[10px] font-bold text-gray-500 badge-text">DL FRONT</span>
+            <div id="frontDone"
+              class="absolute top-2 right-2 w-5 h-5 bg-green-500 rounded-full flex items-center justify-center shadow-md hidden">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="4">
+                <path d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+          </div>
+          <p class="text-[11px] font-extrabold text-cyan-400 text-center mt-3 tracking-tight label-indicator">DL FRONT
+          </p>
+        </div>
+
+        <!-- DL Back Card -->
+        <div id="tabBack" onclick="switchTab('back')" class="group cursor-pointer opacity-60">
+          <div
+            class="aspect-[1.58] bg-[#1a2639] rounded-xl border-2 border-transparent group-active:scale-95 transition-all flex flex-col items-center justify-center gap-2 relative overflow-hidden active-tab-border">
+            <div class="absolute inset-0 bg-cyan-400/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="gray" stroke-width="1.5"
+              class="icon-indicator">
+              <rect x="2" y="5" width="20" height="14" rx="2" />
+              <rect x="5" y="15" width="14" height="2" rx="0.5" />
+              <line x1="5" y1="9" x2="19" y2="9" />
+            </svg>
+            <span class="text-[10px] font-bold text-gray-500 badge-text">DL BACK</span>
+            <div id="backDone"
+              class="absolute top-2 right-2 w-5 h-5 bg-green-500 rounded-full flex items-center justify-center shadow-md hidden">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="4">
+                <path d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+          </div>
+          <p class="text-[11px] font-extrabold text-gray-500 text-center mt-3 tracking-tight label-indicator">DL BACK
+          </p>
+        </div>
+      </div>
+
+    </main>
+
+    <!-- Footer Actions -->
+    <footer class="p-6 flex gap-4 bg-[#16213e]/40 border-t border-white/5">
+      <button onclick="submitAll()"
+        class="flex-1 py-3 bg-[#3d4d62] hover:bg-[#4a5d77] text-gray-100 text-xs font-bold tracking-widest rounded transition-all shadow-md active:scale-95">
+        SUBMIT
+      </button>
+      <button onclick="clearRes()"
+        class="flex-1 py-3 bg-[#3d4d62] hover:bg-[#4a5d77] text-gray-100 text-xs font-bold tracking-widest rounded transition-all shadow-md active:scale-95">
+        RESET
+      </button>
+    </footer>
+
+    <!-- Results Modal (Slide Up) -->
+    <div id="dlResult" class="absolute inset-0 z-50 bg-[#0d1b2a] flex flex-col p-6 result-sheet hidden">
+      <div class="w-full h-1 bg-white/10 rounded-full mb-6 mx-auto max-w-[40px]" onclick="clearRes()"></div>
+      <div id="resultContent" class="flex-1 overflow-y-auto">
+        <!-- Result layout will go here (Same as user's robust code) -->
+        <div
+          class="bg-gradient-to-br from-[#1b263b] to-[#0d1b2a] rounded-2xl p-6 border border-white/5 accent-glow mb-6">
+          <p id="rState" class="text-[9px] font-extrabold tracking-[0.2em] text-cyan-400 mb-2">UNITED STATES · DRIVER
+            LICENSE</p>
+          <h2 id="rName" class="text-2xl font-black text-white leading-tight mb-2">—</h2>
+          <div class="flex items-center gap-3">
+            <span id="rLic" class="text-sm font-mono text-cyan-400"># —</span>
+            <span id="rBadge"
+              class="px-2 py-0.5 bg-green-500/10 border border-green-500/30 text-green-400 text-[10px] font-bold rounded">●
+              VALID</span>
+          </div>
+        </div>
+
+        <div id="resultFields" class="grid grid-cols-2 gap-3 mb-6">
+          <!-- Dynamic fields -->
+        </div>
+
+        <div class="flex flex-col gap-3">
+          <button onclick="copyAll()"
+            class="w-full py-4 glass text-white text-sm font-bold rounded-xl flex items-center justify-center gap-3">
+            <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path
+                d="M8 7V6a2 2 0 012-2h10a2 2 0 012 2v10a2 2 0 01-2 2h-1M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-2M8 7l4 4m0 0l-4 4m4-4H8" />
+            </svg>
+            Copy Data
+          </button>
+          <button onclick="clearRes()"
+            class="w-full py-4 text-gray-400 text-sm font-bold flex items-center justify-center">
+            ✕ Close Result
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Hidden inputs -->
+  <input type="file" id="inCapture" accept="image/*" capture="environment" onchange="onPhotoFile(event)">
+  <input type="file" id="inGallery" accept="image/*" onchange="onPhotoFile(event)">
+  <canvas id="cvs" class="hidden"></canvas>
+  <div id="tst"
+    class="fixed bottom-10 left-1/2 -translate-x-1/2 bg-black/80 backdrop-blur-xl border border-white/10 px-6 py-3 rounded-full text-xs font-bold text-white z-[100] translate-y-20 opacity-0 transition-all duration-300 shadow-2xl">
+  </div>
+
+  <style>
+    /* UI Helper classes for Tab transitions */
+    .active-tab-border {
+      border-color: #00e5ff !important;
+      box-shadow: 0 0 15px rgba(0, 229, 255, 0.1);
+    }
+
+    .active-tab-border .icon-indicator {
+      stroke: #00e5ff;
+      filter: drop-shadow(0 0 5px #00e5ff);
+    }
+
+    .active-tab-border .badge-text {
+      color: #00e5ff;
+    }
+  </style>
+
+  <script>
+    'use strict';
+
+    /* ══════════════════════════
+       State
+    ══════════════════════════ */
+    var camStream = null;
+    var camReady = false;
+    var inPreview = false;
+    var activeTab = 'front';
+    var parsedData = {};
+
+    // DOM Elements
+    const vid = document.getElementById('vid');
+    const preview = document.getElementById('preview');
+    const capBtn = document.getElementById('capBtn');
+    const hintText = document.getElementById('hintText');
+    const bzone = document.getElementById('bzone');
+    const statusBadge = document.getElementById('statusBadge');
+    const statusText = document.getElementById('statusText');
+    const flash = document.getElementById('flash');
+    const resultSheet = document.getElementById('dlResult');
+    const cameraPlaceholder = document.getElementById('cameraPlaceholder');
+    const camError = document.getElementById('camError');
+
+    /* ══════════════════════════
+       Tabs & UI
+    ══════════════════════════ */
+    function switchTab(t) {
+      if (activeTab === t) return;
+      activeTab = t;
+
+      const frontTab = document.getElementById('tabFront');
+      const backTab = document.getElementById('tabBack');
+
+      if (t === 'front') {
+        frontTab.classList.remove('opacity-60');
+        backTab.classList.add('opacity-60');
+        hintText.innerHTML = 'Position the <span class="text-white font-bold">front</span> of your driver\'s license in the frame, then tab Capture -- or load from your device.';
+        bzone.classList.add('hidden');
+      } else {
+        backTab.classList.remove('opacity-60');
+        frontTab.classList.add('opacity-60');
+        hintText.innerHTML = 'Position the <span class="text-white font-bold">back</span> of your driver\'s license with the barcode in the frame.';
+        bzone.classList.remove('hidden');
+      }
+
+      document.querySelectorAll('.active-tab-border').forEach(el => el.classList.remove('active-tab-border'));
+      document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1)).querySelector('div').classList.add('active-tab-border');
+
+      if (inPreview) doRetake();
+    }
+
+    // Initialize UI
+    switchTab('front');
+
+    /* ══════════════════════════
+       Camera Logic (Robust)
+    ══════════════════════════ */
+    async function openWebcam() {
+      cameraPlaceholder.classList.add('opacity-50', 'pointer-events-none');
+      camError.classList.add('hidden');
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        showWebcamErr('Browser not supported.');
+        return;
+      }
+
+      const list = [
+        { video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false },
+        { video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+        { video: { facingMode: 'environment' }, audio: false },
+        { video: true, audio: false }
+      ];
+
+      for (let i = 0; i < list.length; i++) {
+        try {
+          camStream = await navigator.mediaDevices.getUserMedia(list[i]);
+          onStream(camStream);
+          return;
+        } catch (e) {
+          if (i === list.length - 1) showWebcamErr(e.message);
+        }
+      }
+    }
+
+    function onStream(s) {
+      vid.srcObject = s;
+      vid.classList.remove('hidden');
+      cameraPlaceholder.classList.add('hidden');
+
+      vid.onloadedmetadata = () => {
+        vid.play();
+        camReady = true;
+        capBtn.disabled = false;
+        statusBadge.classList.remove('hidden');
+        statusText.textContent = 'CAMERA LIVE';
+        toast('Camera active', 'ok');
+      };
+    }
+
+    function stopStream() {
+      if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
+      vid.srcObject = null;
+      vid.classList.add('hidden');
+    }
+
+    function showWebcamErr(msg) {
+      cameraPlaceholder.classList.remove('opacity-50', 'pointer-events-none');
+      camError.textContent = msg.includes('Permission') ? 'Camera blocked. Please check permissions.' : 'Camera error: ' + msg;
+      camError.classList.remove('hidden');
+      toast('Camera error', 'err');
+    }
+
+    /* ══════════════════════════
+       Capture & Decode
+    ══════════════════════════ */
+function doCapture() {
+  if (!camReady || inPreview) return;
+  const W = vid.videoWidth, H = vid.videoHeight;
+  if (!W) return;
+
+  const cvs = document.getElementById('cvs');
+  cvs.width = W; cvs.height = H;
+  const ctx = cvs.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(vid, 0, 0);
+
+  flash.classList.add('opacity-100');
+  setTimeout(() => flash.classList.remove('opacity-100'), 100);
+
+  preview.width = W; preview.height = H;
+  preview.getContext('2d').drawImage(cvs, 0, 0);
+  preview.classList.remove('hidden');
+  // Optional: avoid pausing inline playback mid-frame on iOS
+  // vid.classList.add('hidden'); // consider using visibility instead
+  vid.style.visibility = 'hidden';
+
+  inPreview = true;
+  capBtn.classList.add('opacity-30');
+
+  if (activeTab === 'back') {
+    statusText.textContent = 'DECODING...';
+    decodeCanvas(cvs, (text) => {
+      if (text) {
+        const p = parseAAMVA(text);
+        markDone('back');
+        showResult(p, text);
+        toast('Decoded successfully!', 'ok');
+      } else {
+        statusText.textContent = 'NO BARCODE';
+        toast('No barcode found. Retry.', 'err');
+        setTimeout(doRetake, 1500);
+      }
+    });
+  } else {
+    markDone('front');
+    statusText.textContent = 'CAPTURED';
+    toast('Front captured! Switch to back.', 'ok');
+    setTimeout(() => switchTab('back'), 1000);
+  }
+}
+
+function doRetake() {
+  inPreview = false;
+  preview.classList.add('hidden');
+  vid.style.visibility = '';
+  vid.classList.remove('hidden');
+  capBtn.classList.remove('opacity-30');
+  statusText.textContent = 'CAMERA LIVE';
+}
+	
+	// Utility: draw source canvas into a new, smaller canvas (keeps aspect)
+function scaleCanvas(src, maxSide = 1280) {
+  const sW = src.width, sH = src.height;
+  const scale = Math.min(1, maxSide / Math.max(sW, sH));
+  if (scale === 1) return src;
+
+  const c = document.createElement('canvas');
+  c.width = Math.round(sW * scale);
+  c.height = Math.round(sH * scale);
+  const ctx = c.getContext('2d', { willReadFrequently: true }); // iOS perf hint
+  ctx.drawImage(src, 0, 0, c.width, c.height);
+  return c;
+}
+
+// Utility: crop bottom stripe (ROI) where PDF417 typically is
+function cropBottomStripe(src, heightPct = 0.28, sidePadPct = 0.04) {
+  const c = document.createElement('canvas');
+  const roiH = Math.round(src.height * heightPct);
+  const pad = Math.round(src.width * sidePadPct);
+  c.width = src.width - pad * 2;
+  c.height = roiH;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(
+    src,
+    pad, src.height - roiH, c.width, roiH,  // src rect
+    0, 0, c.width, roiH                     // dst rect
+  );
+  return c;
+}
+
+function decodeCanvas(origCanvas, cb) {
+  // 1) Work on a scaled copy for performance.
+  let work = scaleCanvas(origCanvas, 1280);
+
+  // 2) If scanning the back, use a bottom stripe ROI to help PDF417.
+  if (activeTab === 'back') {
+    work = cropBottomStripe(work, 0.28, 0.04);
+  }
+
+  if (window.ZXing) {
+    const fmts = [
+      ZXing.BarcodeFormat.PDF_417, ZXing.BarcodeFormat.QR_CODE,
+      ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.DATA_MATRIX,
+      ZXing.BarcodeFormat.AZTEC
+    ];
+
+    function tryZX(canvas) {
+      try {
+        const hints = new ZXing.Map();
+        hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, fmts);
+        hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+        const reader = new ZXing.MultiFormatReader();
+        reader.setHints(hints);
+
+        // Get image data from *work* canvas
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const lm = new ZXing.RGBLuminanceSource(id.data, canvas.width, canvas.height);
+        const bm = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(lm));
+        const rs = reader.decode(bm);
+        return rs ? rs.getText() : null;
+      } catch {
+        return null;
+      }
+    }
+
+    // Try straight + rotations on the *work* canvas
+    const res = tryZX(work) || tryZX(rot(work, 90)) || tryZX(rot(work, 270));
+    if (res) { cb(res); return; }
+  }
+
+  // Optional last resort (skip on iOS 18 if you like)
+  if ('BarcodeDetector' in window) {
+    new BarcodeDetector().detect(work).then(rs => {
+      if (rs && rs.length) {
+        let r = rs[0];
+        rs.forEach(x => { if ((x.format || '').toLowerCase().includes('pdf')) r = x; });
+        cb(r.rawValue);
+      } else cb(null);
+    }).catch(() => cb(null));
+    return;
+  }
+
+  cb(null);
+}
+``
+
+    function rot(src, deg) {
+      const c = document.createElement('canvas');
+      const ctx = c.getContext('2d');
+      if (deg === 90 || deg === 270) { c.width = src.height; c.height = src.width; }
+      else { c.width = src.width; c.height = src.height; }
+      ctx.translate(c.width / 2, c.height / 2);
+      ctx.rotate(deg * Math.PI / 180);
+      ctx.drawImage(src, -src.width / 2, -src.height / 2);
+      return c;
+    }
+
+    function onPhotoFile(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        const cvs = document.getElementById('cvs');
+        cvs.width = img.width; cvs.height = img.height;
+        cvs.getContext('2d').drawImage(img, 0, 0);
+
+        preview.width = img.width; preview.height = img.height;
+        preview.getContext('2d').drawImage(img, 0, 0);
+        preview.classList.remove('hidden');
+        cameraPlaceholder.classList.add('hidden');
+        vid.classList.add('hidden');
+        inPreview = true;
+
+        if (activeTab === 'back') {
+          statusText.textContent = 'DECODING...';
+          decodeCanvas(cvs, (text) => {
+            if (text) {
+              const p = parseAAMVA(text);
+              markDone('back');
+              showResult(p, text);
+              toast('Decoded from photo!', 'ok');
+            } else {
+              statusText.textContent = 'NOT FOUND';
+              toast('No barcode found in image.', 'err');
+            }
+          });
+        } else {
+          markDone('front');
+          toast('Front photo captured!', 'ok');
+          setTimeout(() => switchTab('back'), 1000);
+        }
+      };
+      img.src = url;
+    }
+
+    /* ══════════════════════════
+       AAMVA PARSER
+    ══════════════════════════ */
+    function parseAAMVA(raw) {
+      var d = { raw: raw };
+      function get(code) {
+        var m = raw.match(new RegExp(code + '([^\r\n]+)'));
+        return m ? m[1].trim() : '';
+      }
+      var hm = raw.match(/ANSI\s+(\d{6})(\d{2})/);
+      if (hm) { d.issuerID = hm[1]; d.version = parseInt(hm[2], 10); }
+      d.isAAMVA = raw.indexOf('@') !== -1 && raw.indexOf('ANSI') !== -1;
+
+      d.lastName = get('DCS') || get('DAB') || '';
+      d.firstName = get('DAC') || '';
+      d.middleName = get('DAD') || '';
+      if (!d.firstName) {
+        var dct = get('DCT');
+        if (dct) { var pts = dct.split(/[,\s]+/); d.firstName = pts[0] || ''; d.middleName = pts.slice(1).join(' '); }
+      }
+      d.fullName = [d.firstName, d.middleName, d.lastName].filter(Boolean).join(' ');
+
+      function pd(s) {
+        if (!s) return null;
+        var n = s.replace(/\D/g, '');
+        if (n.length !== 8) return null;
+        var a = parseInt(n.substring(0, 2), 10);
+        if (a >= 1 && a <= 12) return { m: a, d: parseInt(n.substring(2, 4), 10), y: parseInt(n.substring(4), 10) };
+        return { y: parseInt(n.substring(0, 4), 10), m: parseInt(n.substring(4, 6), 10), d: parseInt(n.substring(6), 10) };
+        return { y: parseInt(n.substring(0, 4), 10), m: parseInt(n.substring(4, 6), 10), d: parseInt(n.substring(6), 10) };
+      }
+      function fd(dt) {
+        if (!dt) return '—';
+        var mo = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        return (mo[dt.m - 1] || '??') + ' ' + String(dt.d).padStart(2, '0') + ', ' + dt.y;
+      }
+      d.dob = pd(get('DBB') || get('DAJ'));
+      d.expiry = pd(get('DBA'));
+      d.issue = pd(get('DBD') || get('DAI'));
+      d.dobStr = fd(d.dob); d.expStr = fd(d.expiry); d.issStr = fd(d.issue);
+      if (d.dob) {
+        var now = new Date(), age = now.getFullYear() - d.dob.y;
+        if (now < new Date(now.getFullYear(), d.dob.m - 1, d.dob.d)) age--;
+        d.age = age;
+      }
+      if (d.expiry) { var ex = new Date(d.expiry.y, d.expiry.m - 1, d.expiry.d); d.expired = new Date() > ex; d.valid = !d.expired; }
+
+      d.street = get('DAG') || '';
+      d.city = get('DAI') || '';
+      d.state = get('DAJ') || '';
+      d.zip = get('DAK') || '';
+      d.country = get('DCG') || 'USA';
+      d.licNum = get('DAQ') || get('DBN') || '';
+      d.licCls = get('DCA') || '';
+
+      var sx = get('DBC');
+      d.sex = sx === '1' ? 'Male' : sx === '2' ? 'Female' : sx === '9' ? 'Non-binary' : sx;
+      d.eye = get('DAY') || '';
+      d.hair = get('DAZ') || '';
+      d.race = get('DCE') || get('DCL') || '';
+
+      var ht = get('DAU') || '';
+      if (ht) {
+        var htn = parseInt(ht.replace(/\D/g, ''), 10);
+        if (ht.toLowerCase().includes('cm') || htn > 250) d.height = htn + ' cm';
+        else if (htn >= 400 && htn <= 800) d.height = Math.floor(htn / 100) + "'" + (htn % 100) + '"';
+        else d.height = ht;
+      }
+      var wt = get('DAW') || get('DAX') || '';
+      d.weight = wt ? (wt.replace(/\D/g, '') + (wt.toLowerCase().includes('k') ? ' kg' : ' lbs')) : '';
+
+      // Additional fields
+      d.inventory = get('DCK') || '';
+      d.documentDisc = get('DCF') || '';
+      d.compliance = get('DDA') || '';
+      d.audit = get('DCJ') || '';
+
+      return d;
+    }
+
+    /* ══════════════════════════
+       Results & UI
+    ══════════════════════════ */
+    var STATES = { 'AL': 'Alabama', 'AK': 'Alaska', 'AZ': 'Arizona', 'AR': 'Arkansas', 'CA': 'California', 'CO': 'Colorado', 'CT': 'Connecticut', 'DE': 'Delaware', 'FL': 'Florida', 'GA': 'Georgia', 'HI': 'Hawaii', 'ID': 'Idaho', 'IL': 'Illinois', 'IN': 'Indiana', 'IA': 'Iowa', 'KS': 'Kansas', 'KY': 'Kentucky', 'LA': 'Louisiana', 'ME': 'Maine', 'MD': 'Maryland', 'MA': 'Massachusetts', 'MI': 'Michigan', 'MN': 'Minnesota', 'MS': 'Mississippi', 'MO': 'Missouri', 'MT': 'Montana', 'NE': 'Nebraska', 'NV': 'Nevada', 'NH': 'New Hampshire', 'NJ': 'New Jersey', 'NM': 'New Mexico', 'NY': 'New York', 'NC': 'North Carolina', 'ND': 'North Dakota', 'OH': 'Ohio', 'OK': 'Oklahoma', 'OR': 'Oregon', 'PA': 'Pennsylvania', 'RI': 'Rhode Island', 'SC': 'South Carolina', 'SD': 'South Dakota', 'TN': 'Tennessee', 'TX': 'Texas', 'UT': 'Utah', 'VT': 'Vermont', 'VA': 'Virginia', 'WA': 'Washington', 'WV': 'West Virginia', 'WI': 'Wisconsin', 'WY': 'Wyoming', 'DC': 'Washington D.C.' };
+
+    function showResult(p, raw) {
+      parsedData = p;
+      var st = STATES[p.state] || p.state || 'United States';
+      document.getElementById('rState').textContent = (st + ' · DRIVER LICENSE').toUpperCase();
+      document.getElementById('rName').textContent = p.fullName || 'UNABLE TO PARSE';
+      document.getElementById('rLic').textContent = p.licNum ? '# ' + p.licNum : '# —';
+
+      const b = document.getElementById('rBadge');
+      if (p.valid === true) { b.className = 'px-2 py-0.5 bg-green-500/10 border border-green-500/30 text-green-400 text-[10px] font-bold rounded'; b.textContent = '● VALID'; }
+      else if (p.expired === true) { b.className = 'px-2 py-0.5 bg-red-500/10 border border-red-500/30 text-red-400 text-[10px] font-bold rounded'; b.textContent = '● EXPIRED'; }
+      else { b.className = 'px-2 py-0.5 bg-gray-500/10 border border-gray-500/30 text-gray-400 text-[10px] font-bold rounded'; b.textContent = '● UNKNOWN'; }
+
+      const fields = [
+        { label: 'Date of Birth', val: p.dobStr, color: (p.age >= 21 ? 'text-green-400' : p.age >= 18 ? 'text-yellow-400' : p.age ? 'text-red-400' : '') },
+        { label: 'Age', val: p.age ? p.age + ' yrs' : '—' },
+        { label: 'Sex', val: p.sex },
+        { label: 'Eye Color', val: p.eye },
+        { label: 'Hair Color', val: p.hair },
+        { label: 'Race', val: p.race },
+        { label: 'Height', val: p.height },
+        { label: 'Weight', val: p.weight },
+        { label: 'Issued', val: p.issStr },
+        { label: 'Expiry', val: p.expStr, color: (p.expired ? 'text-red-400' : p.valid ? 'text-green-400' : '') },
+        { label: 'Lic Class', val: p.licCls },
+        { label: 'State', val: p.state },
+        { label: 'City', val: p.city },
+        { label: 'Zip', val: p.zip }
+      ];
+
+      const grid = document.getElementById('resultFields');
+      grid.innerHTML = '';
+      fields.forEach(f => {
+        grid.innerHTML += `
+          <div class="bg-white/5 border border-white/5 rounded-xl p-3">
+            <p class="text-[9px] font-bold text-gray-500 uppercase tracking-wider mb-1">${f.label}</p>
+            <p class="text-sm font-bold ${f.color || 'text-white'}">${f.val || '—'}</p>
+          </div>
+        `;
+      });
+
+      if (p.street) {
+        grid.innerHTML += `
+          <div class="col-span-2 bg-white/5 border border-white/5 rounded-xl p-3">
+            <p class="text-[9px] font-bold text-gray-500 uppercase tracking-wider mb-1">Street Address</p>
+            <p class="text-sm font-bold text-white">${p.street}</p>
+          </div>
+        `;
+      }
+
+      grid.innerHTML += `
+        <div class="col-span-2 bg-white/5 border border-white/5 rounded-xl p-3">
+          <p class="text-[9px] font-bold text-gray-500 uppercase tracking-wider mb-1">Raw Barcode Data</p>
+          <p class="text-[10px] font-mono text-gray-400 break-all leading-tight mt-1 opacity-50 hover:opacity-100 transition-opacity cursor-help" onclick="alert(this.textContent)">${raw}</p>
+        </div>
+      `;
+
+      resultSheet.classList.remove('hidden');
+    }
+
+    function markDone(t) {
+      document.getElementById(t + 'Done').classList.remove('hidden');
+    }
+
+    function clearRes() {
+      resultSheet.classList.add('hidden');
+      document.getElementById('frontDone').classList.add('hidden');
+      document.getElementById('backDone').classList.add('hidden');
+      doRetake();
+      switchTab('front');
+    }
+
+    function toast(msg, type) {
+      const el = document.getElementById('tst');
+      el.textContent = msg;
+      el.classList.remove('translate-y-20', 'opacity-0');
+      el.classList.add('translate-y-0', 'opacity-100');
+      if (type === 'err') el.classList.add('border-red-500/50', 'text-red-400');
+      else el.classList.add('border-cyan-500/50', 'text-cyan-400');
+
+      clearTimeout(window._tst);
+      window._tst = setTimeout(() => {
+        el.classList.add('translate-y-20', 'opacity-0');
+        el.classList.remove('translate-y-0', 'opacity-100', 'border-red-500/50', 'text-red-400', 'border-cyan-500/50', 'text-cyan-400');
+      }, 3000);
+    }
+
+    function copyAll() {
+      var p = parsedData; if (!p.fullName) return;
+      var txt = [
+        '--- Phoenix EDL Scan Report ---',
+        'Name: ' + p.fullName,
+        'DOB: ' + p.dobStr + (p.age ? ' (Age: ' + p.age + ')' : ''),
+        'License #: ' + p.licNum,
+        'Class: ' + p.licCls,
+        'State: ' + p.state,
+        'City: ' + p.city,
+        'Street: ' + p.street,
+        'Zip: ' + p.zip,
+        'Country: ' + p.country,
+        'Issued: ' + p.issStr,
+        'Expires: ' + p.expStr,
+        'Status: ' + (p.valid ? 'VALID' : p.expired ? 'EXPIRED' : 'UNKNOWN'),
+        'Sex: ' + p.sex,
+        'Eye Color: ' + p.eye,
+        'Hair Color: ' + p.hair,
+        'Height: ' + p.height,
+        'Weight: ' + p.weight,
+        'Race: ' + p.race,
+        '--- Legal/Meta ---',
+        'Issuer ID: ' + p.issuerID,
+        'AAMVA Version: ' + p.version,
+        'Inventory: ' + p.inventory,
+        'Doc Disc: ' + p.documentDisc,
+        'Compliance: ' + p.compliance,
+        'Audit: ' + p.audit
+      ].join('\n');
+      navigator.clipboard.writeText(txt).then(() => toast('Copied full report', 'ok'));
+    }
+
+    function submitAll() {
+      if (!document.getElementById('backDone').classList.contains('hidden')) {
+        toast('Data submitted!', 'ok');
+      } else {
+        toast('Please scan both sides first.', 'err');
+      }
+    }
+  </script>
+</body>
+
+</html>
