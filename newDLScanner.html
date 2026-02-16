@@ -457,196 +457,258 @@
     /* ══════════════════════════
        Capture & Decode
     ══════════════════════════ */
-function doCapture() {
-  if (!camReady || inPreview) return;
-  const W = vid.videoWidth, H = vid.videoHeight;
-  if (!W) return;
+    function doCapture() {
+      if (!camReady || inPreview) return;
+      const W = vid.videoWidth, H = vid.videoHeight;
+      if (!W) return;
 
-  const cvs = document.getElementById('cvs');
-  cvs.width = W; cvs.height = H;
-  const ctx = cvs.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(vid, 0, 0);
+      const cvs = document.getElementById('cvs');
+      cvs.width = W; cvs.height = H;
+      const ctx = cvs.getContext('2d');
+      ctx.drawImage(vid, 0, 0);
 
-  flash.classList.add('opacity-100');
-  setTimeout(() => flash.classList.remove('opacity-100'), 100);
+      flash.classList.add('opacity-100');
+      setTimeout(() => flash.classList.remove('opacity-100'), 100);
 
-  preview.width = W; preview.height = H;
-  preview.getContext('2d').drawImage(cvs, 0, 0);
-  preview.classList.remove('hidden');
-  // Optional: avoid pausing inline playback mid-frame on iOS
-  // vid.classList.add('hidden'); // consider using visibility instead
-  vid.style.visibility = 'hidden';
+      preview.width = W; preview.height = H;
+      preview.getContext('2d').drawImage(cvs, 0, 0);
+      preview.classList.remove('hidden');
+      vid.classList.add('hidden');
 
-  inPreview = true;
-  capBtn.classList.add('opacity-30');
+      inPreview = true;
+      capBtn.classList.add('opacity-30');
 
-  if (activeTab === 'back') {
-    statusText.textContent = 'DECODING...';
-    decodeCanvas(cvs, (text) => {
-      if (text) {
-        const p = parseAAMVA(text);
-        markDone('back');
-        showResult(p, text);
-        toast('Decoded successfully!', 'ok');
+      if (activeTab === 'back') {
+        statusText.textContent = 'DECODING...';
+        decodeCanvas(cvs, (text) => {
+          if (text) {
+            const p = parseAAMVA(text);
+            markDone('back');
+            showResult(p, text);
+            toast('Decoded successfully!', 'ok');
+          } else {
+            statusText.textContent = 'NO BARCODE';
+            toast('No barcode found. Retry.', 'err');
+            setTimeout(doRetake, 1500);
+          }
+        });
       } else {
-        statusText.textContent = 'NO BARCODE';
-        toast('No barcode found. Retry.', 'err');
-        setTimeout(doRetake, 1500);
+        markDone('front');
+        statusText.textContent = 'CAPTURED';
+        toast('Front captured! Switch to back.', 'ok');
+        setTimeout(() => switchTab('back'), 1000);
       }
-    });
-  } else {
-    markDone('front');
-    statusText.textContent = 'CAPTURED';
-    toast('Front captured! Switch to back.', 'ok');
-    setTimeout(() => switchTab('back'), 1000);
-  }
-}
+    }
 
-function doRetake() {
-  inPreview = false;
-  preview.classList.add('hidden');
-  vid.style.visibility = '';
-  vid.classList.remove('hidden');
-  capBtn.classList.remove('opacity-30');
-  statusText.textContent = 'CAMERA LIVE';
-}
+    function doRetake() {
+      inPreview = false;
+      preview.classList.add('hidden');
+      vid.classList.remove('hidden');
+      capBtn.classList.remove('opacity-30');
+      statusText.textContent = 'CAMERA LIVE';
+    }
 	
-	// Utility: draw source canvas into a new, smaller canvas (keeps aspect)
-function scaleCanvas(src, maxSide = 1280) {
-  const sW = src.width, sH = src.height;
-  const scale = Math.min(1, maxSide / Math.max(sW, sH));
-  if (scale === 1) return src;
+	
+  function scaleDownCanvas(srcCanvas, maxDim = 1280) {
+    const w = srcCanvas.width, h = srcCanvas.height;
+    const scale = Math.min(1, maxDim / Math.max(w, h));
+    if (scale >= 1) return srcCanvas;
 
-  const c = document.createElement('canvas');
-  c.width = Math.round(sW * scale);
-  c.height = Math.round(sH * scale);
-  const ctx = c.getContext('2d', { willReadFrequently: true }); // iOS perf hint
-  ctx.drawImage(src, 0, 0, c.width, c.height);
-  return c;
-}
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.floor(w * scale));
+    c.height = Math.max(1, Math.floor(h * scale));
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(srcCanvas, 0, 0, c.width, c.height);
+    return c;
+  }
+  
+  
+  function extractROI(srcCanvas) {
+    // For back side, focus on bottom 25% with ~5% side margins
+    if (activeTab !== 'back') return srcCanvas;
 
-// Utility: crop bottom stripe (ROI) where PDF417 typically is
-function cropBottomStripe(src, heightPct = 0.28, sidePadPct = 0.04) {
-  const c = document.createElement('canvas');
-  const roiH = Math.round(src.height * heightPct);
-  const pad = Math.round(src.width * sidePadPct);
-  c.width = src.width - pad * 2;
-  c.height = roiH;
-  const ctx = c.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(
-    src,
-    pad, src.height - roiH, c.width, roiH,  // src rect
-    0, 0, c.width, roiH                     // dst rect
-  );
-  return c;
-}
+    const w = srcCanvas.width, h = srcCanvas.height;
+    const marginX = Math.floor(w * 0.05);
+    const roiY = Math.floor(h * 0.75);
+    const roiH = Math.max(1, Math.floor(h * 0.25));
+    const roiW = Math.max(1, w - marginX * 2);
 
-function decodeCanvas(origCanvas, cb) {
-  // 1) Work on a scaled copy for performance.
-  let work = scaleCanvas(origCanvas, 1280);
-
-  // 2) If scanning the back, use a bottom stripe ROI to help PDF417.
-  if (activeTab === 'back') {
-    work = cropBottomStripe(work, 0.28, 0.04);
+    const c = document.createElement('canvas');
+    c.width = roiW;
+    c.height = roiH;
+    const cx = c.getContext('2d');
+    cx.drawImage(srcCanvas, marginX, roiY, roiW, roiH, 0, 0, roiW, roiH);
+    return c;
   }
 
-  if (window.ZXing) {
-    const fmts = [
-      ZXing.BarcodeFormat.PDF_417, ZXing.BarcodeFormat.QR_CODE,
-      ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.DATA_MATRIX,
-      ZXing.BarcodeFormat.AZTEC
-    ];
 
-    function tryZX(canvas) {
+
+
+function decodeCanvas(cvs, cb) {
+    (async () => {
       try {
-        const hints = new ZXing.Map();
-        hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, fmts);
-        hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-        const reader = new ZXing.MultiFormatReader();
-        reader.setHints(hints);
+        // 1) Focus on ROI for back side and scale down for performance
+        let roi = extractROI(cvs);
+        roi = scaleDownCanvas(roi, 1280);
 
-        // Get image data from *work* canvas
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
-        const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const lm = new ZXing.RGBLuminanceSource(id.data, canvas.width, canvas.height);
-        const bm = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(lm));
-        const rs = reader.decode(bm);
-        return rs ? rs.getText() : null;
-      } catch {
-        return null;
-      }
-    }
+        // 2) Try ZXing with hints & rotations
+        if (window.ZXing) {
+          const fmts = [
+            window.ZXing.BarcodeFormat.PDF_417,
+            window.ZXing.BarcodeFormat.QR_CODE,
+            window.ZXing.BarcodeFormat.CODE_128,
+            window.ZXing.BarcodeFormat.DATA_MATRIX,
+            window.ZXing.BarcodeFormat.AZTEC
+          ];
 
-    // Try straight + rotations on the *work* canvas
-    const res = tryZX(work) || tryZX(rot(work, 90)) || tryZX(rot(work, 270));
-    if (res) { cb(res); return; }
-  }
+          const hints = new Map(); // Use native Map for zxing-js
+          hints.set(window.ZXing.DecodeHintType.POSSIBLE_FORMATS, fmts);
+          hints.set(window.ZXing.DecodeHintType.TRY_HARDER, true);
 
-  // Optional last resort (skip on iOS 18 if you like)
-  if ('BarcodeDetector' in window) {
-    new BarcodeDetector().detect(work).then(rs => {
-      if (rs && rs.length) {
-        let r = rs[0];
-        rs.forEach(x => { if ((x.format || '').toLowerCase().includes('pdf')) r = x; });
-        cb(r.rawValue);
-      } else cb(null);
-    }).catch(() => cb(null));
-    return;
-  }
+          const reader = new window.ZXing.MultiFormatReader();
+          reader.setHints(hints);
 
-  cb(null);
-}
-``
+          const tryZX = (canvas) => {
+            try {
+              const id = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+              const lm = new window.ZXing.RGBLuminanceSource(id.data, canvas.width, canvas.height);
+              const bm = new window.ZXing.BinaryBitmap(new window.ZXing.HybridBinarizer(lm));
+              const rs = reader.decode(bm);
+              return rs ? rs.getText() : null;
+            } catch (_) { return null; }
+          };
 
-    function rot(src, deg) {
-      const c = document.createElement('canvas');
-      const ctx = c.getContext('2d');
-      if (deg === 90 || deg === 270) { c.width = src.height; c.height = src.width; }
-      else { c.width = src.width; c.height = src.height; }
-      ctx.translate(c.width / 2, c.height / 2);
-      ctx.rotate(deg * Math.PI / 180);
-      ctx.drawImage(src, -src.width / 2, -src.height / 2);
-      return c;
-    }
-
-    function onPhotoFile(e) {
-      const file = e.target.files[0];
-      if (!file) return;
-      const url = URL.createObjectURL(file);
-      const img = new Image();
-      img.onload = () => {
-        const cvs = document.getElementById('cvs');
-        cvs.width = img.width; cvs.height = img.height;
-        cvs.getContext('2d').drawImage(img, 0, 0);
-
-        preview.width = img.width; preview.height = img.height;
-        preview.getContext('2d').drawImage(img, 0, 0);
-        preview.classList.remove('hidden');
-        cameraPlaceholder.classList.add('hidden');
-        vid.classList.add('hidden');
-        inPreview = true;
-
-        if (activeTab === 'back') {
-          statusText.textContent = 'DECODING...';
-          decodeCanvas(cvs, (text) => {
-            if (text) {
-              const p = parseAAMVA(text);
-              markDone('back');
-              showResult(p, text);
-              toast('Decoded from photo!', 'ok');
-            } else {
-              statusText.textContent = 'NOT FOUND';
-              toast('No barcode found in image.', 'err');
-            }
-          });
-        } else {
-          markDone('front');
-          toast('Front photo captured!', 'ok');
-          setTimeout(() => switchTab('back'), 1000);
+          // Try 0°, 90°, 270° (180 rarely adds value vs 0 once PDF417 is horizontal)
+          const zres = tryZX(roi) || tryZX(rot(roi, 90)) || tryZX(rot(roi, 270));
+          if (zres) { cb(zres); return; }
         }
-      };
-      img.src = url;
+
+        // 3) Fallback: BarcodeDetector (explicit formats + ImageBitmap for Safari)
+        if ('BarcodeDetector' in window) {
+          let formats = ['pdf417', 'qr_code', 'data_matrix', 'aztec', 'code_128', 'code_39'];
+          try {
+            if (window.BarcodeDetector.getSupportedFormats) {
+              const sup = await window.BarcodeDetector.getSupportedFormats();
+              formats = formats.filter(f => sup.includes(f));
+            }
+          } catch (_) {}
+
+          if (formats.length) {
+            const detector = new window.BarcodeDetector({ formats });
+            let source = roi;
+            try {
+              // More reliable on Safari
+              source = await createImageBitmap(roi);
+            } catch (_) { /* keep canvas as source */ }
+
+            const rs = await detector.detect(source);
+            if (rs && rs.length) {
+              // Prefer PDF417 if present
+              let best = rs[0];
+              for (const r of rs) {
+                if ((r.format || '').toLowerCase() === 'pdf417') { best = r; break; }
+              }
+              cb(best.rawValue || null);
+              return;
+            }
+          }
+        }
+
+        // 4) Nothing found
+        cb(null);
+      } catch (e) {
+        cb(null);
+      }
+    })();
+  }
+
+
+
+  function rot(src, deg) {
+    const c = document.createElement('canvas');
+    const ctx = c.getContext('2d');
+    if (deg === 90 || deg === 270) { c.width = src.height; c.height = src.width; }
+    else { c.width = src.width; c.height = src.height; }
+    ctx.translate(c.width / 2, c.height / 2);
+    ctx.rotate(deg * Math.PI / 180);
+    ctx.drawImage(src, -src.width / 2, -src.height / 2);
+    return c;
+  }
+
+
+
+  async function onPhotoFile(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    const cvs = document.getElementById('cvs');
+    const pcx = cvs.getContext('2d');
+
+    // Use createImageBitmap with EXIF orientation if available (iOS fix)
+    try {
+      if ('createImageBitmap' in window) {
+        const ib = await createImageBitmap(file, { imageOrientation: 'from-image' });
+        cvs.width = ib.width; cvs.height = ib.height;
+        pcx.drawImage(ib, 0, 0);
+      } else {
+        // Fallback to Image
+        await new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => {
+            cvs.width = img.width; cvs.height = img.height;
+            pcx.drawImage(img, 0, 0);
+            resolve();
+          };
+          img.onerror = reject;
+          img.src = URL.createObjectURL(file);
+        });
+      }
+    } catch (_) {
+      // Last-resort fallback
+      await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          cvs.width = img.width; cvs.height = img.height;
+          pcx.drawImage(img, 0, 0);
+          resolve();
+        };
+        img.onerror = reject;
+        img.src = URL.createObjectURL(file);
+      });
     }
+
+    // Mirror UI to preview state
+    const preview = document.getElementById('preview');
+    const vid = document.getElementById('vid');
+    preview.width = cvs.width; preview.height = cvs.height;
+    preview.getContext('2d').drawImage(cvs, 0, 0);
+    preview.classList.remove('hidden');
+    document.getElementById('cameraPlaceholder').classList.add('hidden');
+    vid.classList.add('hidden');
+    inPreview = true;
+
+    if (activeTab === 'back') {
+      statusText.textContent = 'DECODING...';
+      decodeCanvas(cvs, (text) => {
+        if (text) {
+          const p = parseAAMVA(text);
+          markDone('back');
+          showResult(p, text);
+          toast('Decoded from photo!', 'ok');
+        } else {
+          statusText.textContent = 'NOT FOUND';
+          toast('No barcode found in image.', 'err');
+        }
+      });
+    } else {
+      markDone('front');
+      toast('Front photo captured!', 'ok');
+      setTimeout(() => switchTab('back'), 1000);
+    }
+  }
+
 
     /* ══════════════════════════
        AAMVA PARSER
@@ -676,7 +738,6 @@ function decodeCanvas(origCanvas, cb) {
         if (n.length !== 8) return null;
         var a = parseInt(n.substring(0, 2), 10);
         if (a >= 1 && a <= 12) return { m: a, d: parseInt(n.substring(2, 4), 10), y: parseInt(n.substring(4), 10) };
-        return { y: parseInt(n.substring(0, 4), 10), m: parseInt(n.substring(4, 6), 10), d: parseInt(n.substring(6), 10) };
         return { y: parseInt(n.substring(0, 4), 10), m: parseInt(n.substring(4, 6), 10), d: parseInt(n.substring(6), 10) };
       }
       function fd(dt) {
